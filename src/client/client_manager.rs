@@ -1,12 +1,13 @@
 use std::io::{Read, Write};
-
-use streamapp::audio::{AudioWriter, WavFileWrite};
-use streamapp::protocol::extract_header;
+use streamapp::audio::file::AudioWriter;
+use streamapp::audio::wav::WavFileWrite;
+use streamapp::protocol::{SampleFormat, extract_header};
 
 // Interface to interact with the server
 pub struct ClientInterface {
     tcp_stream: std::net::TcpStream,
     audio_capabilities: Vec<Box<dyn AudioWriter>>,
+    play_audio_after_download: bool,
 }
 
 // Manage the tcp connection to the server
@@ -18,6 +19,7 @@ pub struct ClientSocket {
 #[allow(unused)]
 pub enum Capabilities {
     SaveToFile(String),
+    PlayFileAfterDownload,
     RealTimePlayback,
 }
 
@@ -28,7 +30,10 @@ impl ClientInterface {
                 self.audio_capabilities.push(Box::new(WavFileWrite::new(s)));
             }
             Capabilities::RealTimePlayback => {
-                todo!()
+                todo!("Real-time playback not implemented yet");
+            }
+            Capabilities::PlayFileAfterDownload => {
+                self.play_audio_after_download = true;
             }
         }
         self
@@ -39,20 +44,22 @@ impl ClientInterface {
             capability.update_format(header);
         }
     }
-    fn write_audio_data(&mut self, data: &[u8]) {
+    fn write_audio_data(&mut self, data: &[u8]) -> Result<(), String> {
         for capability in &mut self.audio_capabilities {
-            capability.write(data);
+            capability.write(data)?;
         }
+        Ok(())
     }
 
-    fn end_audio(&mut self) {
+    fn end_audio(&mut self) -> Result<(), String> {
         for capability in &mut self.audio_capabilities {
-            capability.finalize();
+            capability.finalize()?;
         }
+        Ok(())
     }
 
     pub fn start_playing(&mut self) -> Result<(), String> {
-        let buf = streamapp::protocol::make_start_playing_message(0, 0, 0);
+        let buf = streamapp::protocol::make_start_playing_message(0, 0, 0, SampleFormat::Int);
         self.tcp_stream.write_all(&buf).map_err(|e| e.to_string())?;
 
         let mut recv_buf = Vec::new();
@@ -77,17 +84,19 @@ impl ClientInterface {
                 }
 
                 if !header.is_data_message() {
-                    self.end_audio();
-                    return Ok(());
+                    return self.end_audio();
                 }
 
-                self.write_audio_data(payload);
+                self.write_audio_data(payload)?;
 
                 recv_buf.drain(..message_len);
             }
         }
         println!("Connection closed by server");
-        self.end_audio();
+        self.end_audio()?;
+        if self.play_audio_after_download {
+            todo!("Play audio after download not implemented yet");
+        }
         Ok(())
     }
 }
@@ -99,6 +108,7 @@ impl ClientSocket {
         let interface = ClientInterface {
             tcp_stream: stream,
             audio_capabilities: vec![],
+            play_audio_after_download: false,
         };
         Ok(interface)
     }

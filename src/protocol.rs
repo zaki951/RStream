@@ -1,4 +1,5 @@
 use bincode::{Decode, Encode};
+use cpal::Sample;
 use serde::{Deserialize, Serialize};
 
 const PROTOCOL_MAGIC: u16 = 0xA1B2;
@@ -11,6 +12,13 @@ pub enum MessageType {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Encode, Decode)]
+
+pub enum SampleFormat {
+    Int,
+    Float,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Encode, Decode)]
 pub struct Header {
     magic: u16,
     version: u8,
@@ -19,6 +27,7 @@ pub struct Header {
     sample_rate: u32,
     channels: u8,
     bits_per_sample: u8,
+    sample_format: SampleFormat,
 }
 
 pub fn make_full_message(header: &Header, payload: &[u8]) -> Vec<u8> {
@@ -28,7 +37,12 @@ pub fn make_full_message(header: &Header, payload: &[u8]) -> Vec<u8> {
     message.extend_from_slice(payload);
     message
 }
-pub fn make_start_playing_message(sample_rate: u32, channels: u8, bits_per_sample: u8) -> Vec<u8> {
+pub fn make_start_playing_message(
+    sample_rate: u32,
+    channels: u8,
+    bits_per_sample: u8,
+    sample_format: SampleFormat,
+) -> Vec<u8> {
     let header = Header {
         magic: PROTOCOL_MAGIC,
         version: 1,
@@ -37,6 +51,7 @@ pub fn make_start_playing_message(sample_rate: u32, channels: u8, bits_per_sampl
         sample_rate,
         channels,
         bits_per_sample,
+        sample_format,
     };
     make_full_message(&header, &[])
 }
@@ -65,6 +80,7 @@ impl Header {
             sample_rate: 0,
             channels: 0,
             bits_per_sample: 0,
+            sample_format: SampleFormat::Int,
         }
     }
     pub fn to_wavspec(&self) -> hound::WavSpec {
@@ -72,7 +88,10 @@ impl Header {
             channels: self.channels as u16,
             sample_rate: self.sample_rate,
             bits_per_sample: self.bits_per_sample as u16,
-            sample_format: hound::SampleFormat::Int,
+            sample_format: match self.sample_format {
+                SampleFormat::Float => hound::SampleFormat::Float,
+                SampleFormat::Int => hound::SampleFormat::Int,
+            },
         }
     }
 
@@ -80,6 +99,10 @@ impl Header {
         self.channels = spec.channels as u8;
         self.sample_rate = spec.sample_rate;
         self.bits_per_sample = spec.bits_per_sample as u8;
+        self.sample_format = match spec.sample_format {
+            hound::SampleFormat::Float => SampleFormat::Float,
+            hound::SampleFormat::Int => SampleFormat::Int,
+        };
     }
 
     pub fn set_payload_size(&mut self, payload_size: u16) {
@@ -92,5 +115,13 @@ impl Header {
 
     pub fn is_start_playing_message(&self) -> bool {
         self.msg_type == MessageType::StartPlaying
+    }
+
+    pub fn is_valid_magic(&self) -> bool {
+        self.magic == PROTOCOL_MAGIC
+    }
+
+    pub fn bits_per_sample(&self) -> u8 {
+        self.bits_per_sample
     }
 }

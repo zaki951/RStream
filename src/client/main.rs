@@ -1,15 +1,41 @@
 mod client_manager;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Audio Streaming Client")]
+struct Args {
+    /// File output path (for saving received audio)
+    #[arg(long, default_value = "/tmp/client_output.wav")]
+    output: String,
+
+    /// Server address
+    #[arg(long, default_value = "localhost")]
+    address: String,
+
+    /// Server port
+    #[arg(long, default_value_t = 8080)]
+    port: u16,
+
+    /// Play audio after download
+    /// Default is false
+    #[arg(long, default_value_t = false)]
+    play: bool,
+}
+
 fn main() -> Result<(), String> {
+    let args = Args::parse();
     let client = client_manager::ClientSocket {
-        address: "localhost".to_string(),
-        port: 8080,
+        address: args.address,
+        port: args.port,
     };
 
     let mut handler = client.connect().expect("Failed to connect to server");
 
+    if args.play {
+        handler.add_capability(client_manager::Capabilities::PlayFileAfterDownload);
+    }
+
     handler
-        .add_capability(client_manager::Capabilities::SaveToFile(
-            "output.wav".to_string(),
-        ))
+        .add_capability(client_manager::Capabilities::SaveToFile(args.output))
         .start_playing()
 }
