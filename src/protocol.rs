@@ -22,7 +22,7 @@ pub struct Header {
     magic: u16,
     version: u8,
     msg_type: MessageType,
-    payload_size: u16,
+    payload_size: u32,
     sample_rate: u32,
     channels: u8,
     bits_per_sample: u8,
@@ -99,7 +99,7 @@ impl Header {
         };
     }
 
-    pub fn set_payload_size(&mut self, payload_size: u16) {
+    pub fn set_payload_size(&mut self, payload_size: u32) {
         self.payload_size = payload_size
     }
 

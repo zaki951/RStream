@@ -30,7 +30,7 @@ impl ClientInterface {
                 self.audio_capabilities.push(Box::new(WavFileWrite::new(s)));
             }
             Capabilities::RealTimePlayback => {
-                todo!("Real-time playback not implemented yet");
+                unimplemented!("Real-time playback not implemented yet");
             }
             Capabilities::PlayFileAfterDownload(file) => {
                 self.play_audio_after_download = Some(file);
@@ -39,10 +39,14 @@ impl ClientInterface {
         self
     }
 
-    fn update_audio_capabilities(&mut self, header: &streamapp::protocol::Header) {
+    fn update_audio_capabilities(
+        &mut self,
+        header: &streamapp::protocol::Header,
+    ) -> Result<(), String> {
         for capability in &mut self.audio_capabilities {
-            capability.update_format(header);
+            capability.update_format(header)?;
         }
+        Ok(())
     }
     fn write_audio_data(&mut self, data: &[u8]) -> Result<(), String> {
         for capability in &mut self.audio_capabilities {
@@ -79,7 +83,7 @@ impl ClientInterface {
 
             while let Some((header, payload, message_len)) = extract_header(&recv_buf) {
                 if !updated {
-                    self.update_audio_capabilities(&header);
+                    self.update_audio_capabilities(&header)?;
                     updated = true;
                 }
 
@@ -96,8 +100,7 @@ impl ClientInterface {
         if let Some(file) = self.play_audio_after_download.as_ref() {
             self.audio_player
                 .as_ref()
-                .play_from_file(file, audio::file::FileFormat::Wav)
-                .unwrap();
+                .play_from_file(file, audio::file::FileFormat::Wav)?;
         }
         Ok(())
     }

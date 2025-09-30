@@ -6,7 +6,7 @@ pub enum FileFormat {
 pub trait AudioWriter {
     fn write(&mut self, data: &[u8]) -> Result<(), String>;
     fn finalize(&mut self) -> Result<(), String>;
-    fn update_format(&mut self, header: &crate::protocol::Header);
+    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<(), String>;
 }
 
 pub trait AudioReader {

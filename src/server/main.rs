@@ -52,8 +52,12 @@ async fn main() -> Result<(), String> {
             args.output
         }
         "file" => {
-            let path = args.path.unwrap();
-            println!("Starting server to stream file: {}", &path);
+            let path = args
+                .path
+                .ok_or_else(|| "The file path should be specified".to_string())?;
+            if !std::path::Path::new(&path).is_file() {
+                return Err(format!("Invalid file path {}", path));
+            }
             path
         }
         _ => {

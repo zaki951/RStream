@@ -20,7 +20,6 @@ fn read_i32_samples(
     reader: &mut hound::WavReader<std::io::BufReader<std::fs::File>>,
     data: &mut [u8],
 ) -> Result<usize, String> {
-    dbg!();
     let mut pos = 0;
     for sample in reader.samples::<i32>().take(data.len() / 4) {
         if pos + 4 > data.len() {
@@ -137,43 +136,33 @@ impl WavFileWrite {
 
 impl AudioWriter for WavFileWrite {
     fn write(&mut self, data: &[u8]) -> Result<(), String> {
-        if self.writer.is_none() {
-            panic!("Writer not initialized");
-        }
-
-        if let Some(writer) = &mut self.writer {
-            let size = match writer.spec().bits_per_sample {
-                16 => 2,
-                32 => 4,
-                _ => return Err("Unsupported bits_per_sample".to_string()),
-            };
-            for chunk in data.chunks(size) {
-                if chunk.len() < size {
-                    break;
+        let writer = self.writer.as_mut().ok_or("Writer not initialized")?;
+        let spec = writer.spec();
+        match spec.sample_format {
+            hound::SampleFormat::Int => match spec.bits_per_sample {
+                16 => {
+                    for chunk in data.chunks_exact(2) {
+                        let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+                        writer.write_sample(sample).map_err(|e| e.to_string())?;
+                    }
                 }
-                match writer.spec().sample_format {
-                    hound::SampleFormat::Int => match writer.spec().bits_per_sample {
-                        16 => {
-                            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-                            writer.write_sample(sample).map_err(|e| e.to_string())?;
-                        }
-                        32 => {
-                            let sample =
-                                i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                            writer.write_sample(sample).map_err(|e| e.to_string())?;
-                        }
-                        _ => todo!(),
-                    },
-                    hound::SampleFormat::Float => match writer.spec().bits_per_sample {
-                        32 => {
-                            let sample =
-                                f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                            writer.write_sample(sample).map_err(|e| e.to_string())?;
-                        }
-                        _ => todo!(),
-                    },
+                32 => {
+                    for chunk in data.chunks_exact(4) {
+                        let sample = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                        writer.write_sample(sample).map_err(|e| e.to_string())?;
+                    }
                 }
-            }
+                _ => unimplemented!(),
+            },
+            hound::SampleFormat::Float => match spec.bits_per_sample {
+                32 => {
+                    for chunk in data.chunks_exact(4) {
+                        let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                        writer.write_sample(sample).map_err(|e| e.to_string())?;
+                    }
+                }
+                _ => unimplemented!(),
+            },
         }
         Ok(())
     }
@@ -185,15 +174,14 @@ impl AudioWriter for WavFileWrite {
             Ok(())
         }
     }
-    fn update_format(&mut self, header: &crate::protocol::Header) {
+    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<(), String> {
         if self.writer.is_none() {
-            dbg!(header);
             let spec = header.to_wavspec();
-            let writer = hound::WavWriter::create(&self.file_path, spec).unwrap();
+            let writer =
+                hound::WavWriter::create(&self.file_path, spec).map_err(|e| e.to_string())?;
             self.writer = Some(writer);
-        } else {
-            todo!()
         }
+        Ok(())
     }
 }
 
@@ -212,7 +200,7 @@ impl WavFileSender {
             if n == 0 {
                 break;
             }
-            header.set_payload_size(n as u16);
+            header.set_payload_size(n as u32);
             let fmessage = protocol::make_full_message(&header, &buffer[..n]);
             socket
                 .write_all(&fmessage)
