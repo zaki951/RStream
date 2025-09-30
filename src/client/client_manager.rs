@@ -1,16 +1,16 @@
 use std::io::{Read, Write};
-use streamapp::audio::file::AudioWriter;
+use streamapp::audio;
+use streamapp::audio::file::{AudioPlayer, AudioWriter};
 use streamapp::audio::wav::WavFileWrite;
-use streamapp::protocol::{SampleFormat, extract_header};
+use streamapp::protocol::extract_header;
 
-// Interface to interact with the server
 pub struct ClientInterface {
     tcp_stream: std::net::TcpStream,
     audio_capabilities: Vec<Box<dyn AudioWriter>>,
-    play_audio_after_download: bool,
+    play_audio_after_download: Option<String>,
+    audio_player: Box<dyn AudioPlayer>,
 }
 
-// Manage the tcp connection to the server
 pub struct ClientSocket {
     pub address: String,
     pub port: u16,
@@ -19,7 +19,7 @@ pub struct ClientSocket {
 #[allow(unused)]
 pub enum Capabilities {
     SaveToFile(String),
-    PlayFileAfterDownload,
+    PlayFileAfterDownload(String),
     RealTimePlayback,
 }
 
@@ -32,8 +32,8 @@ impl ClientInterface {
             Capabilities::RealTimePlayback => {
                 todo!("Real-time playback not implemented yet");
             }
-            Capabilities::PlayFileAfterDownload => {
-                self.play_audio_after_download = true;
+            Capabilities::PlayFileAfterDownload(file) => {
+                self.play_audio_after_download = Some(file);
             }
         }
         self
@@ -59,7 +59,7 @@ impl ClientInterface {
     }
 
     pub fn start_playing(&mut self) -> Result<(), String> {
-        let buf = streamapp::protocol::make_start_playing_message(0, 0, 0, SampleFormat::Int);
+        let buf = streamapp::protocol::make_start_playing_message();
         self.tcp_stream.write_all(&buf).map_err(|e| e.to_string())?;
 
         let mut recv_buf = Vec::new();
@@ -92,10 +92,12 @@ impl ClientInterface {
                 recv_buf.drain(..message_len);
             }
         }
-        println!("Connection closed by server");
         self.end_audio()?;
-        if self.play_audio_after_download {
-            todo!("Play audio after download not implemented yet");
+        if let Some(file) = self.play_audio_after_download.as_ref() {
+            self.audio_player
+                .as_ref()
+                .play_from_file(file, audio::file::FileFormat::Wav)
+                .unwrap();
         }
         Ok(())
     }
@@ -108,7 +110,8 @@ impl ClientSocket {
         let interface = ClientInterface {
             tcp_stream: stream,
             audio_capabilities: vec![],
-            play_audio_after_download: false,
+            play_audio_after_download: None,
+            audio_player: Box::new(audio::cpal::CpalInterface),
         };
         Ok(interface)
     }

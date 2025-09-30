@@ -1,5 +1,5 @@
 use clap::Parser;
-use streamapp::audio::cpal::record_audio;
+use streamapp::audio::{cpal::CpalInterface, file::AudioRecorder};
 mod server_manager;
 
 #[derive(Parser, Debug)]
@@ -36,11 +36,18 @@ struct Args {
 async fn main() -> Result<(), String> {
     let args = Args::parse();
 
+    let audio_interface = CpalInterface;
     let path = match args.mode.as_str() {
         "rec" => {
             let duration = args.duration.unwrap_or(10);
             println!("Recording from microphone for {} seconds...", duration);
-            record_audio(duration, &args.output).map_err(|e| e.to_string())?;
+            audio_interface
+                .record_into_file(
+                    duration,
+                    &args.output,
+                    streamapp::audio::file::FileFormat::Wav,
+                )
+                .map_err(|e| e.to_string())?;
             println!("Recording saved to {}", &args.output);
             args.output
         }
@@ -55,7 +62,7 @@ async fn main() -> Result<(), String> {
     };
 
     println!("Starting server...");
-    dbg!(&path);
+
     let server = server_manager::Server::new(args.address, args.port, path);
     server.run().await;
 

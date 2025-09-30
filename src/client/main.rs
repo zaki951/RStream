@@ -32,7 +32,9 @@ fn main() -> Result<(), String> {
     let mut handler = client.connect().expect("Failed to connect to server");
 
     if args.play {
-        handler.add_capability(client_manager::Capabilities::PlayFileAfterDownload);
+        handler.add_capability(client_manager::Capabilities::PlayFileAfterDownload(
+            args.output.clone(),
+        ));
     }
 
     handler

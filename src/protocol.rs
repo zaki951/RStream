@@ -1,5 +1,4 @@
 use bincode::{Decode, Encode};
-use cpal::Sample;
 use serde::{Deserialize, Serialize};
 
 const PROTOCOL_MAGIC: u16 = 0xA1B2;
@@ -37,21 +36,16 @@ pub fn make_full_message(header: &Header, payload: &[u8]) -> Vec<u8> {
     message.extend_from_slice(payload);
     message
 }
-pub fn make_start_playing_message(
-    sample_rate: u32,
-    channels: u8,
-    bits_per_sample: u8,
-    sample_format: SampleFormat,
-) -> Vec<u8> {
+pub fn make_start_playing_message() -> Vec<u8> {
     let header = Header {
         magic: PROTOCOL_MAGIC,
         version: 1,
         msg_type: MessageType::StartPlaying,
         payload_size: 0,
-        sample_rate,
-        channels,
-        bits_per_sample,
-        sample_format,
+        sample_rate: 0,
+        channels: 0,
+        bits_per_sample: 0,
+        sample_format: SampleFormat::Int,
     };
     make_full_message(&header, &[])
 }

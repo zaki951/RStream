@@ -1,18 +1,105 @@
-//! Records a WAV file (roughly 3 seconds long) using the default input device and config.
-//!
-//! The input data is recorded to "$CARGO_MANIFEST_DIR/recorded.wav".
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample};
+use cpal::{Device, FromSample, Sample};
 use std::fs::File;
 use std::io::BufWriter;
 use std::sync::{Arc, Mutex};
 
-pub fn play_audio_from_wav(path: &str) {
-    todo!("Implement audio playback from WAV file");
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+
+use crate::audio::file::{AudioPlayer, AudioRecorder, FileFormat};
+
+pub struct CpalInterface;
+
+impl AudioPlayer for CpalInterface {
+    fn play_from_file(&self, file_path: &str, format: FileFormat) -> Result<(), String> {
+        match format {
+            FileFormat::Wav => play_audio_from_wav(file_path).map_err(|e| e.to_string()),
+        }
+    }
 }
 
-pub fn record_audio(duration: u64, path: &str) -> Result<(), anyhow::Error> {
+impl AudioRecorder for CpalInterface {
+    fn record_into_file(
+        &self,
+        duration: u64,
+        path: &str,
+        format: FileFormat,
+    ) -> Result<(), String> {
+        match format {
+            FileFormat::Wav => record_audio(duration, path).map_err(|e| e.to_string()),
+        }
+    }
+}
+
+fn play_audio<T>(
+    mut reader: hound::WavReader<std::io::BufReader<File>>,
+    device: Device,
+    config: cpal::SupportedStreamConfig,
+) -> Result<(), anyhow::Error>
+where
+    T: hound::Sample + cpal::SizedSample + Send + Sync + 'static,
+{
+    let samples: Vec<T> = reader
+        .samples::<T>()
+        .map(|s| s.unwrap_or(T::EQUILIBRIUM))
+        .collect();
+
+    let done = Arc::new(AtomicBool::new(false));
+    let done_clone = done.clone();
+
+    let mut samples_iter = samples.into_iter();
+
+    let err_fn = move |err| eprintln!("an error occurred on stream: {err}");
+
+    let stream = device.build_output_stream(
+        &config.into(),
+        move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
+            for sample in output.iter_mut() {
+                *sample = samples_iter.next().unwrap_or(T::EQUILIBRIUM);
+            }
+            if samples_iter.len() == 0 {
+                done_clone.store(true, Ordering::Release);
+            }
+        },
+        err_fn,
+        None,
+    )?;
+
+    stream.play()?;
+
+    while !done.load(Ordering::Acquire) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    Ok(())
+}
+
+pub fn play_audio_from_wav(path: &str) -> Result<(), anyhow::Error> {
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("No output device available"))?;
+    println!("Output device: {}", device.name()?);
+
+    let config = device.default_output_config()?;
+
+    let reader: hound::WavReader<std::io::BufReader<File>> = hound::WavReader::open(path)?;
+    let spec = reader.spec();
+    match spec.sample_format {
+        hound::SampleFormat::Float => match spec.bits_per_sample {
+            32 => play_audio::<f32>(reader, device, config),
+            _ => unimplemented!(),
+        },
+        hound::SampleFormat::Int => match spec.bits_per_sample {
+            32 => play_audio::<i32>(reader, device, config),
+            16 => play_audio::<i16>(reader, device, config),
+            _ => unimplemented!(),
+        },
+    }
+}
+
+fn record_audio(duration: u64, path: &str) -> Result<(), anyhow::Error> {
     let host = cpal::default_host();
 
     let device = host.default_input_device().unwrap();

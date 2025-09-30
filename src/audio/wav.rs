@@ -41,7 +41,6 @@ fn read_i16_samples(
     reader: &mut hound::WavReader<std::io::BufReader<std::fs::File>>,
     data: &mut [u8],
 ) -> Result<usize, String> {
-    dbg!();
     let mut pos = 0;
     for sample in reader.samples::<i16>().take(data.len() / 2) {
         if pos + 2 > data.len() {
@@ -188,7 +187,7 @@ impl AudioWriter for WavFileWrite {
     }
     fn update_format(&mut self, header: &crate::protocol::Header) {
         if self.writer.is_none() {
-            dbg!("Initializing WAV writer with header: {:?}", header);
+            dbg!(header);
             let spec = header.to_wavspec();
             let writer = hound::WavWriter::create(&self.file_path, spec).unwrap();
             self.writer = Some(writer);
