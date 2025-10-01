@@ -1,6 +1,6 @@
-use streamapp::audio::file::FileFormat;
-use streamapp::audio::wav::WavFileSender;
-use streamapp::protocol::extract_header;
+use crate::audio::file::FileFormat;
+use crate::audio::wav::WavFileSender;
+use crate::protocol::extract_header;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;

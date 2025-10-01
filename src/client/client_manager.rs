@@ -1,11 +1,12 @@
-use std::io::{Read, Write};
-use streamapp::audio;
-use streamapp::audio::file::{AudioPlayer, AudioWriter};
-use streamapp::audio::wav::WavFileWrite;
-use streamapp::protocol::extract_header;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use crate::audio;
+use crate::audio::file::{AudioPlayer, AudioWriter};
+use crate::audio::wav::WavFileWrite;
+use crate::protocol::extract_header;
 
 pub struct ClientInterface {
-    tcp_stream: std::net::TcpStream,
+    tcp_stream: tokio::net::TcpStream,
     audio_capabilities: Vec<Box<dyn AudioWriter>>,
     play_audio_after_download: Option<String>,
     audio_player: Box<dyn AudioPlayer>,
@@ -41,7 +42,7 @@ impl ClientInterface {
 
     fn update_audio_capabilities(
         &mut self,
-        header: &streamapp::protocol::Header,
+        header: &crate::protocol::Header,
     ) -> Result<(), String> {
         for capability in &mut self.audio_capabilities {
             capability.update_format(header)?;
@@ -62,9 +63,12 @@ impl ClientInterface {
         Ok(())
     }
 
-    pub fn start_playing(&mut self) -> Result<(), String> {
-        let buf = streamapp::protocol::make_start_playing_message();
-        self.tcp_stream.write_all(&buf).map_err(|e| e.to_string())?;
+    pub async fn start_playing(&mut self) -> Result<(), String> {
+        let buf = crate::protocol::make_start_playing_message();
+        self.tcp_stream
+            .write_all(&buf)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let mut recv_buf = Vec::new();
         let mut tmp_buf = [0u8; 4096];
@@ -74,6 +78,7 @@ impl ClientInterface {
             let n = self
                 .tcp_stream
                 .read(&mut tmp_buf)
+                .await
                 .map_err(|e| e.to_string())?;
             if n == 0 {
                 break;
@@ -107,9 +112,11 @@ impl ClientInterface {
 }
 
 impl ClientSocket {
-    pub fn connect(&self) -> Result<ClientInterface, String> {
+    pub async fn connect(&self) -> Result<ClientInterface, String> {
         let addr = format!("{}:{}", self.address, self.port);
-        let stream = std::net::TcpStream::connect(addr).map_err(|e| e.to_string())?;
+        let stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| e.to_string())?;
         let interface = ClientInterface {
             tcp_stream: stream,
             audio_capabilities: vec![],

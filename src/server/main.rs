@@ -1,6 +1,6 @@
 use clap::Parser;
 use streamapp::audio::{cpal::CpalInterface, file::AudioRecorder};
-mod server_manager;
+use streamapp::server::server_manager;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Audio Streaming Server")]

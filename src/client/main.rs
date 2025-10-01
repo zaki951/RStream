@@ -1,5 +1,5 @@
-mod client_manager;
 use clap::Parser;
+use streamapp::client::client_manager;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Audio Streaming Client")]
@@ -22,14 +22,15 @@ struct Args {
     play: bool,
 }
 
-fn main() -> Result<(), String> {
+#[tokio::main]
+async fn main() -> Result<(), String> {
     let args = Args::parse();
     let client = client_manager::ClientSocket {
         address: args.address,
         port: args.port,
     };
 
-    let mut handler = client.connect().expect("Failed to connect to server");
+    let mut handler = client.connect().await.expect("Failed to connect to server");
 
     if args.play {
         handler.add_capability(client_manager::Capabilities::PlayFileAfterDownload(
@@ -40,4 +41,5 @@ fn main() -> Result<(), String> {
     handler
         .add_capability(client_manager::Capabilities::SaveToFile(args.output))
         .start_playing()
+        .await
 }
