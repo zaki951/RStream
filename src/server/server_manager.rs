@@ -27,8 +27,7 @@ async fn send_file(
 }
 
 async fn start_play(socket: &mut TcpStream) -> Result<bool, String> {
-    let mut tmp_buf = [0u8; 1024];
-    let mut recv_buf = Vec::new();
+    let mut recv_buf = [0u8; 4096];
     let number_of_attempts = 4;
     let mut attempts = 0;
     let start_playing = loop {
@@ -37,13 +36,11 @@ async fn start_play(socket: &mut TcpStream) -> Result<bool, String> {
             return Ok(false);
         }
         attempts += 1;
-        let n = match socket.read(&mut tmp_buf).await {
+        match socket.read(&mut recv_buf).await {
             Ok(0) => return Err("Connection closed by the client".to_string()),
-            Ok(n) => n,
+            Ok(_) => (),
             Err(e) => return Err(format!("Error reading from socket: {}", e)),
         };
-
-        recv_buf.extend_from_slice(&tmp_buf[..n]);
 
         if let Some((header, _payload, _)) = extract_header(&recv_buf) {
             println!("Received header: {:?}", header);

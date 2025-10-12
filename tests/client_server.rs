@@ -81,7 +81,6 @@ pub fn compare_wav_samples(file1: &str, file2: &str) -> bool {
 }
 
 async fn client_task() -> Result<(), String> {
-    dbg!();
     let client = client_manager::ClientSocket {
         address: ADDRESS.to_string(),
         port: PORT,
@@ -93,9 +92,7 @@ async fn client_task() -> Result<(), String> {
         .add_capability(client_manager::Capabilities::SaveToFile(
             PATH_OUTPUT.to_string(),
         ))
-        .add_capability(client_manager::Capabilities::PlayFileAfterDownload(
-            PATH_OUTPUT.to_string(),
-        ))
+        .add_capability(client_manager::Capabilities::RealTimePlayback)
         .start_playing()
         .await
 }

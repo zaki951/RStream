@@ -20,7 +20,6 @@ pub struct ClientSocket {
 #[allow(unused)]
 pub enum Capabilities {
     SaveToFile(String),
-    PlayFileAfterDownload(String),
     RealTimePlayback,
 }
 
@@ -31,10 +30,8 @@ impl ClientInterface {
                 self.audio_capabilities.push(Box::new(WavFileWrite::new(s)));
             }
             Capabilities::RealTimePlayback => {
-                unimplemented!("Real-time playback not implemented yet");
-            }
-            Capabilities::PlayFileAfterDownload(file) => {
-                self.play_audio_after_download = Some(file);
+                self.audio_capabilities
+                    .push(Box::new(audio::cpal::CpalFileWrite::new()));
             }
         }
         self
@@ -63,17 +60,18 @@ impl ClientInterface {
         Ok(())
     }
 
-    pub async fn start_playing(&mut self) -> Result<(), String> {
+    async fn send_start_playing(&mut self) -> Result<(), String> {
         let buf = crate::protocol::make_start_playing_message();
         self.tcp_stream
             .write_all(&buf)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())
+    }
 
+    async fn recv_data_and_write_it(&mut self) -> Result<(), String> {
+        let mut updated = false;
         let mut recv_buf = Vec::new();
         let mut tmp_buf = [0u8; 4096];
-        let mut updated = false;
-
         loop {
             let n = self
                 .tcp_stream
@@ -93,7 +91,7 @@ impl ClientInterface {
                 }
 
                 if !header.is_data_message() {
-                    return self.end_audio();
+                    return Ok(());
                 }
 
                 self.write_audio_data(payload)?;
@@ -101,6 +99,14 @@ impl ClientInterface {
                 recv_buf.drain(..message_len);
             }
         }
+        Ok(())
+    }
+
+    pub async fn start_playing(&mut self) -> Result<(), String> {
+        self.send_start_playing().await?;
+
+        self.recv_data_and_write_it().await?;
+
         self.end_audio()?;
         if let Some(file) = self.play_audio_after_download.as_ref() {
             self.audio_player

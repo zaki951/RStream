@@ -1,5 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, Sample};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::sync::{Arc, Mutex};
@@ -7,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use crate::audio::file::{AudioPlayer, AudioRecorder, FileFormat};
+use crate::audio::file::{AudioPlayer, AudioRecorder, AudioWriter, FileFormat};
+use crate::protocol::Header;
 
 pub struct CpalInterface;
 
@@ -32,7 +34,7 @@ impl AudioRecorder for CpalInterface {
     }
 }
 
-fn play_audio<T>(
+fn play_audio_wav_file<T>(
     mut reader: hound::WavReader<std::io::BufReader<File>>,
     device: Device,
     config: cpal::StreamConfig,
@@ -82,22 +84,21 @@ pub fn play_audio_from_wav(path: &str) -> Result<(), anyhow::Error> {
         .ok_or_else(|| anyhow::anyhow!("No output device available"))?;
     println!("Output device: {}", device.name()?);
 
-    let default_config = device.default_output_config()?;
     let reader: hound::WavReader<std::io::BufReader<File>> = hound::WavReader::open(path)?;
     let spec = reader.spec();
     let config = cpal::StreamConfig {
-        channels: default_config.channels(),
+        channels: spec.channels as u16,
         sample_rate: cpal::SampleRate(spec.sample_rate),
         buffer_size: cpal::BufferSize::Default,
     };
     match spec.sample_format {
         hound::SampleFormat::Float => match spec.bits_per_sample {
-            32 => play_audio::<f32>(reader, device, config),
+            32 => play_audio_wav_file::<f32>(reader, device, config),
             _ => unimplemented!(),
         },
         hound::SampleFormat::Int => match spec.bits_per_sample {
-            32 => play_audio::<i32>(reader, device, config),
-            16 => play_audio::<i16>(reader, device, config),
+            32 => play_audio_wav_file::<i32>(reader, device, config),
+            16 => play_audio_wav_file::<i16>(reader, device, config),
             _ => unimplemented!(),
         },
     }
@@ -196,5 +197,169 @@ where
                 writer.write_sample(sample).ok();
             }
         }
+    }
+}
+
+pub struct CpalFileWrite {
+    buf: Arc<Mutex<VecDeque<u8>>>,
+    played: bool,
+    stream: Option<cpal::Stream>,
+    header: Option<Header>,
+}
+
+impl CpalFileWrite {
+    pub fn new() -> Self {
+        const DEFAULT_CAPACITY: usize = 400_000;
+        Self {
+            buf: Arc::new(Mutex::new(VecDeque::with_capacity(DEFAULT_CAPACITY))),
+            played: false,
+            stream: None,
+            header: None,
+        }
+    }
+
+    fn play_audio_from_buf(&mut self) -> Result<(), anyhow::Error> {
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| anyhow::anyhow!("No output device available"))?;
+
+        if self.header.is_none() {
+            return Err(anyhow::anyhow!("Audio format header not set"));
+        }
+        let header = self.header.as_ref().unwrap();
+        dbg!(header);
+        let config = cpal::StreamConfig {
+            channels: header.get_channels() as u16,
+            sample_rate: cpal::SampleRate(header.get_sample_rate()),
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        let err_fn = move |err| eprintln!("an error occurred on stream: {err}");
+        let cloned_buf = Arc::clone(&self.buf);
+
+        match header.get_sample_format() {
+            crate::protocol::SampleFormat::Int => match header.get_bits_per_sample() {
+                16 => return self.build_stream::<i16>(device, config, cloned_buf, err_fn),
+                32 => return self.build_stream::<i32>(device, config, cloned_buf, err_fn),
+                _ => return Err(anyhow::anyhow!("Unsupported bits per sample")),
+            },
+            crate::protocol::SampleFormat::Float => match header.get_bits_per_sample() {
+                32 => return self.build_stream::<f32>(device, config, cloned_buf, err_fn),
+                _ => return Err(anyhow::anyhow!("Unsupported bits per sample")),
+            },
+        }
+    }
+
+    fn extract_bytes_from_buf(buf: &mut VecDeque<u8>, sample_size: usize) -> Option<Vec<u8>> {
+        if buf.len() < sample_size {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(sample_size);
+        for _ in 0..sample_size {
+            bytes.push(buf.pop_front().unwrap());
+        }
+        Some(bytes)
+    }
+
+    fn build_stream<T>(
+        &mut self,
+        device: cpal::Device,
+        config: cpal::StreamConfig,
+        buf: Arc<Mutex<VecDeque<u8>>>,
+        err_fn: impl Fn(cpal::StreamError) + Send + 'static,
+    ) -> Result<(), anyhow::Error>
+    where
+        T: cpal::Sample
+            + cpal::SizedSample
+            + FromSample<i16>
+            + FromSample<i32>
+            + FromSample<f32>
+            + Send
+            + 'static,
+    {
+        let channels = config.channels as usize;
+        let sample_size = std::mem::size_of::<T>();
+        let frame_size = channels * sample_size;
+
+        let stream = device.build_output_stream(
+            &config,
+            move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
+                let mut buf = buf.lock().unwrap();
+                for frame in output.chunks_mut(channels) {
+                    if buf.len() >= frame_size {
+                        for sample in frame.iter_mut() {
+                            let bytes =
+                                Self::extract_bytes_from_buf(&mut buf, sample_size).unwrap();
+                            let value = match sample_size {
+                                2 => {
+                                    let arr: [u8; 2] =
+                                        bytes.try_into().expect("bytes must be 2 long");
+                                    let val = i16::from_le_bytes(arr);
+                                    T::from_sample(val)
+                                }
+                                4 => {
+                                    let arr: [u8; 4] =
+                                        bytes.try_into().expect("bytes must be 4 long");
+                                    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
+                                    {
+                                        let val = f32::from_le_bytes(arr);
+                                        T::from_sample(val)
+                                    } else {
+                                        let val = i32::from_le_bytes(arr);
+                                        T::from_sample(val)
+                                    }
+                                }
+                                _ => T::EQUILIBRIUM,
+                            };
+                            *sample = value;
+                        }
+                    } else {
+                        for sample in frame.iter_mut() {
+                            *sample = T::EQUILIBRIUM;
+                        }
+                    }
+                }
+            },
+            err_fn,
+            None,
+        )?;
+
+        self.stream = Some(stream);
+        Ok(())
+    }
+}
+
+impl AudioWriter for CpalFileWrite {
+    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+        if !self.played {
+            self.play_audio_from_buf().map_err(|e| e.to_string())?;
+            if let Some(stream) = &self.stream {
+                stream.play().map_err(|e| e.to_string())?;
+            }
+            self.played = true;
+        }
+        let mut buf = self.buf.lock().unwrap();
+        buf.extend(data);
+        Ok(())
+    }
+
+    fn finalize(&mut self) -> Result<(), String> {
+        // wait until buffer is empty
+        while !self.buf.lock().unwrap().is_empty() {
+            dbg!(self.buf.lock().unwrap().len());
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if let Some(stream) = &self.stream {
+            stream.pause().map_err(|e| e.to_string())?;
+            self.stream = None;
+        }
+
+        Ok(())
+    }
+
+    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<(), String> {
+        self.header = Some(header.clone());
+        Ok(())
     }
 }

@@ -1,6 +1,11 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+// Start Playing Process
+// Server Wait For Start
+// Server -> Send File
+// Each TCP payload has a header + Payload
+
 const PROTOCOL_MAGIC: u16 = 0xA1B2;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Encode, Decode, PartialEq)]
@@ -77,6 +82,22 @@ impl Header {
             sample_format: SampleFormat::Int,
         }
     }
+    pub fn get_sample_format(&self) -> SampleFormat {
+        self.sample_format
+    }
+
+    pub fn get_bits_per_sample(&self) -> u8 {
+        self.bits_per_sample
+    }
+
+    pub fn get_sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn get_channels(&self) -> u8 {
+        self.channels
+    }
+
     pub fn to_wavspec(&self) -> hound::WavSpec {
         hound::WavSpec {
             channels: self.channels as u16,
@@ -113,9 +134,5 @@ impl Header {
 
     pub fn is_valid_magic(&self) -> bool {
         self.magic == PROTOCOL_MAGIC
-    }
-
-    pub fn bits_per_sample(&self) -> u8 {
-        self.bits_per_sample
     }
 }

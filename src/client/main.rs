@@ -33,13 +33,8 @@ async fn main() -> Result<(), String> {
     let mut handler = client.connect().await.expect("Failed to connect to server");
 
     if args.play {
-        handler.add_capability(client_manager::Capabilities::PlayFileAfterDownload(
-            args.output.clone(),
-        ));
+        handler.add_capability(client_manager::Capabilities::RealTimePlayback);
     }
 
-    handler
-        .add_capability(client_manager::Capabilities::SaveToFile(args.output))
-        .start_playing()
-        .await
+    handler.start_playing().await
 }
