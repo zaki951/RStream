@@ -35,7 +35,7 @@ impl AudioRecorder for CpalInterface {
 fn play_audio<T>(
     mut reader: hound::WavReader<std::io::BufReader<File>>,
     device: Device,
-    config: cpal::SupportedStreamConfig,
+    config: cpal::StreamConfig,
 ) -> Result<(), anyhow::Error>
 where
     T: hound::Sample + cpal::SizedSample + Send + Sync + 'static,
@@ -53,7 +53,7 @@ where
     let err_fn = move |err| eprintln!("an error occurred on stream: {err}");
 
     let stream = device.build_output_stream(
-        &config.into(),
+        &config,
         move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
             for sample in output.iter_mut() {
                 *sample = samples_iter.next().unwrap_or(T::EQUILIBRIUM);
@@ -82,10 +82,14 @@ pub fn play_audio_from_wav(path: &str) -> Result<(), anyhow::Error> {
         .ok_or_else(|| anyhow::anyhow!("No output device available"))?;
     println!("Output device: {}", device.name()?);
 
-    let config = device.default_output_config()?;
-
+    let default_config = device.default_output_config()?;
     let reader: hound::WavReader<std::io::BufReader<File>> = hound::WavReader::open(path)?;
     let spec = reader.spec();
+    let config = cpal::StreamConfig {
+        channels: default_config.channels(),
+        sample_rate: cpal::SampleRate(spec.sample_rate),
+        buffer_size: cpal::BufferSize::Default,
+    };
     match spec.sample_format {
         hound::SampleFormat::Float => match spec.bits_per_sample {
             32 => play_audio::<f32>(reader, device, config),

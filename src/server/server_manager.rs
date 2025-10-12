@@ -5,6 +5,13 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
+pub struct Server {
+    address: String,
+    port: u16,
+    send_file_format: FileFormat,
+    file_path: String,
+}
+
 async fn send_file(
     file_format: FileFormat,
     mut socket: &mut TcpStream,
@@ -17,13 +24,6 @@ async fn send_file(
             Ok(())
         }
     }
-}
-
-pub struct Server {
-    address: String,
-    port: u16,
-    send_file_format: FileFormat,
-    file_path: String,
 }
 
 async fn start_play(socket: &mut TcpStream) -> Result<bool, String> {
