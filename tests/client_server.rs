@@ -1,3 +1,4 @@
+use anyhow::Result;
 use hound;
 use std::time::Duration;
 use streamapp::client::client_manager;
@@ -8,7 +9,7 @@ const PORT: u16 = 8080;
 const PATH_INPUT: &str = "/tmp/test_input.wav";
 const PATH_OUTPUT: &str = "/tmp/test_output.wav";
 
-async fn server_task() -> Result<(), String> {
+async fn server_task() -> Result<()> {
     let server: server_manager::Server =
         server_manager::Server::new(ADDRESS.to_string(), PORT, PATH_INPUT.to_string());
     server.run().await;
@@ -80,7 +81,7 @@ pub fn compare_wav_samples(file1: &str, file2: &str) -> bool {
     }
 }
 
-async fn client_task() -> Result<(), String> {
+async fn client_task() -> Result<()> {
     let client = client_manager::ClientSocket {
         address: ADDRESS.to_string(),
         port: PORT,

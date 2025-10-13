@@ -1,10 +1,10 @@
 use crate::audio::file::FileFormat;
 use crate::audio::wav::WavFileSender;
 use crate::protocol::extract_header;
+use anyhow::Result;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-
 pub struct Server {
     address: String,
     port: u16,
@@ -12,11 +12,7 @@ pub struct Server {
     file_path: String,
 }
 
-async fn send_file(
-    file_format: FileFormat,
-    mut socket: &mut TcpStream,
-    file: &str,
-) -> Result<(), String> {
+async fn send_file(file_format: FileFormat, mut socket: &mut TcpStream, file: &str) -> Result<()> {
     match file_format {
         FileFormat::Wav => {
             let fs = WavFileSender;

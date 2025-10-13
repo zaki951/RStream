@@ -1,10 +1,10 @@
-use tokio::{io::AsyncWriteExt, net::TcpStream};
-
 use crate::{
     audio::file::{AudioReader, AudioWriter},
     protocol::{self},
 };
+use anyhow::Result;
 use std::io::BufWriter;
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 pub struct WavFileRead {
     reader: Option<hound::WavReader<std::io::BufReader<std::fs::File>>>,
@@ -19,14 +19,14 @@ impl WavFileRead {
 fn read_i32_samples(
     reader: &mut hound::WavReader<std::io::BufReader<std::fs::File>>,
     data: &mut [u8],
-) -> Result<usize, String> {
+) -> Result<usize> {
     let mut pos = 0;
     for sample in reader.samples::<i32>().take(data.len() / 4) {
         if pos + 4 > data.len() {
             break;
         }
 
-        let s = sample.map_err(|e| e.to_string())?;
+        let s = sample?;
         let bytes = s.to_le_bytes();
 
         data[pos..pos + 4].copy_from_slice(&bytes);
@@ -39,14 +39,14 @@ fn read_i32_samples(
 fn read_i16_samples(
     reader: &mut hound::WavReader<std::io::BufReader<std::fs::File>>,
     data: &mut [u8],
-) -> Result<usize, String> {
+) -> Result<usize> {
     let mut pos = 0;
     for sample in reader.samples::<i16>().take(data.len() / 2) {
         if pos + 2 > data.len() {
             break;
         }
 
-        let s = sample.map_err(|e| e.to_string())?;
+        let s = sample?;
         let bytes = s.to_le_bytes();
 
         data[pos..pos + 2].copy_from_slice(&bytes);
@@ -59,14 +59,14 @@ fn read_i16_samples(
 fn read_f32_samples(
     reader: &mut hound::WavReader<std::io::BufReader<std::fs::File>>,
     data: &mut [u8],
-) -> Result<usize, String> {
+) -> Result<usize> {
     let mut pos = 0;
     for sample in reader.samples::<f32>().take(data.len() / 4) {
         if pos + 4 > data.len() {
             break;
         }
 
-        let s = sample.map_err(|e| e.to_string())?;
+        let s = sample?;
         let bytes = s.to_le_bytes();
 
         data[pos..pos + 4].copy_from_slice(&bytes);
@@ -77,7 +77,7 @@ fn read_f32_samples(
 }
 
 impl AudioReader for WavFileRead {
-    fn read(&mut self, data: &mut [u8]) -> Result<usize, String> {
+    fn read(&mut self, data: &mut [u8]) -> Result<usize> {
         if let Some(reader) = &mut self.reader {
             let sample_format = reader.spec().sample_format;
 
@@ -86,14 +86,14 @@ impl AudioReader for WavFileRead {
                     16 => read_i16_samples(reader, data)?,
                     32 => read_i32_samples(reader, data)?,
                     bits => {
-                        return Err(format!("Unsupported bit depth: {}", bits));
+                        return Err(anyhow::anyhow!("Unsupported bit depth: {}", bits));
                     }
                 },
                 hound::SampleFormat::Float => match reader.spec().bits_per_sample {
                     32 => read_f32_samples(reader, data)?,
-                    64 => unimplemented!("64-bit float samples not supported"),
+                    64 => return Err(anyhow::anyhow!("64-bit float samples not supported")),
                     bits => {
-                        return Err(format!("Unsupported bit depth: {}", bits));
+                        return Err(anyhow::anyhow!("Unsupported bit depth: {}", bits));
                     }
                 },
             };
@@ -103,11 +103,11 @@ impl AudioReader for WavFileRead {
         Ok(0)
     }
 
-    fn open_file(&mut self, file_path: &str) -> Result<(), String> {
+    fn open_file(&mut self, file_path: &str) -> Result<()> {
         if self.reader.is_some() {
-            return Err("File already opened".to_string());
+            return Err(anyhow::anyhow!("File already opened"));
         }
-        let reader = hound::WavReader::open(file_path).map_err(|e| e.to_string())?;
+        let reader = hound::WavReader::open(file_path)?;
         self.reader = Some(reader);
         Ok(())
     }
@@ -135,21 +135,24 @@ impl WavFileWrite {
 }
 
 impl AudioWriter for WavFileWrite {
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
-        let writer = self.writer.as_mut().ok_or("Writer not initialized")?;
+    fn write(&mut self, data: &[u8]) -> Result<()> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or(anyhow::anyhow!("Writer not initialized"))?;
         let spec = writer.spec();
         match spec.sample_format {
             hound::SampleFormat::Int => match spec.bits_per_sample {
                 16 => {
                     for chunk in data.chunks_exact(2) {
                         let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-                        writer.write_sample(sample).map_err(|e| e.to_string())?;
+                        writer.write_sample(sample)?;
                     }
                 }
                 32 => {
                     for chunk in data.chunks_exact(4) {
                         let sample = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                        writer.write_sample(sample).map_err(|e| e.to_string())?;
+                        writer.write_sample(sample)?;
                     }
                 }
                 _ => unimplemented!(),
@@ -158,7 +161,7 @@ impl AudioWriter for WavFileWrite {
                 32 => {
                     for chunk in data.chunks_exact(4) {
                         let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                        writer.write_sample(sample).map_err(|e| e.to_string())?;
+                        writer.write_sample(sample)?;
                     }
                 }
                 _ => unimplemented!(),
@@ -167,18 +170,17 @@ impl AudioWriter for WavFileWrite {
         Ok(())
     }
 
-    fn finalize(&mut self) -> Result<(), String> {
+    fn finalize(&mut self) -> Result<()> {
         if let Some(writer) = self.writer.take() {
-            writer.finalize().map_err(|e| e.to_string())
+            writer.finalize().map_err(|e| anyhow::anyhow!(e))
         } else {
             Ok(())
         }
     }
-    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<(), String> {
+    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<()> {
         if self.writer.is_none() {
             let spec = header.to_wavspec();
-            let writer =
-                hound::WavWriter::create(&self.file_path, spec).map_err(|e| e.to_string())?;
+            let writer = hound::WavWriter::create(&self.file_path, spec)?;
             self.writer = Some(writer);
         }
         Ok(())
@@ -188,7 +190,7 @@ impl AudioWriter for WavFileWrite {
 pub struct WavFileSender;
 
 impl WavFileSender {
-    pub async fn send_file(&self, socket: &mut TcpStream, file_path: &str) -> Result<(), String> {
+    pub async fn send_file(&self, socket: &mut TcpStream, file_path: &str) -> Result<()> {
         let mut audio_reader = WavFileRead::new();
         audio_reader.open_file(file_path)?;
         let mut buffer = vec![0u8; 4096];
@@ -202,10 +204,7 @@ impl WavFileSender {
             }
             header.set_payload_size(n as u32);
             let fmessage = protocol::make_full_message(&header, &buffer[..n]);
-            socket
-                .write_all(&fmessage)
-                .await
-                .map_err(|e| e.to_string())?;
+            socket.write_all(&fmessage).await?;
             if n < buffer.len() {
                 break;
             }

@@ -1,3 +1,4 @@
+use anyhow::Result;
 use clap::Parser;
 use streamapp::client::client_manager;
 
@@ -23,7 +24,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), String> {
+async fn main() -> Result<()> {
     let args = Args::parse();
     let client = client_manager::ClientSocket {
         address: args.address,

@@ -1,12 +1,12 @@
+use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, Sample};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
-use std::sync::{Arc, Mutex};
-
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 use crate::audio::file::{AudioPlayer, AudioRecorder, AudioWriter, FileFormat};
 use crate::protocol::Header;
@@ -14,22 +14,17 @@ use crate::protocol::Header;
 pub struct CpalInterface;
 
 impl AudioPlayer for CpalInterface {
-    fn play_from_file(&self, file_path: &str, format: FileFormat) -> Result<(), String> {
+    fn play_from_file(&self, file_path: &str, format: FileFormat) -> Result<()> {
         match format {
-            FileFormat::Wav => play_audio_from_wav(file_path).map_err(|e| e.to_string()),
+            FileFormat::Wav => play_audio_from_wav(file_path),
         }
     }
 }
 
 impl AudioRecorder for CpalInterface {
-    fn record_into_file(
-        &self,
-        duration: u64,
-        path: &str,
-        format: FileFormat,
-    ) -> Result<(), String> {
+    fn record_into_file(&self, duration: u64, path: &str, format: FileFormat) -> Result<()> {
         match format {
-            FileFormat::Wav => record_audio(duration, path).map_err(|e| e.to_string()),
+            FileFormat::Wav => record_audio(duration, path),
         }
     }
 }
@@ -77,7 +72,7 @@ where
     Ok(())
 }
 
-pub fn play_audio_from_wav(path: &str) -> Result<(), anyhow::Error> {
+pub fn play_audio_from_wav(path: &str) -> Result<()> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -104,7 +99,7 @@ pub fn play_audio_from_wav(path: &str) -> Result<(), anyhow::Error> {
     }
 }
 
-fn record_audio(duration: u64, path: &str) -> Result<(), anyhow::Error> {
+fn record_audio(duration: u64, path: &str) -> Result<()> {
     let host = cpal::default_host();
 
     let device = host.default_input_device().unwrap();
@@ -218,7 +213,7 @@ impl CpalFileWrite {
         }
     }
 
-    fn play_audio_from_buf(&mut self) -> Result<(), anyhow::Error> {
+    fn play_audio_from_buf(&mut self) -> Result<()> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -331,11 +326,11 @@ impl CpalFileWrite {
 }
 
 impl AudioWriter for CpalFileWrite {
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+    fn write(&mut self, data: &[u8]) -> Result<()> {
         if !self.played {
-            self.play_audio_from_buf().map_err(|e| e.to_string())?;
+            self.play_audio_from_buf()?;
             if let Some(stream) = &self.stream {
-                stream.play().map_err(|e| e.to_string())?;
+                stream.play()?;
             }
             self.played = true;
         }
@@ -344,21 +339,20 @@ impl AudioWriter for CpalFileWrite {
         Ok(())
     }
 
-    fn finalize(&mut self) -> Result<(), String> {
+    fn finalize(&mut self) -> Result<()> {
         // wait until buffer is empty
         while !self.buf.lock().unwrap().is_empty() {
-            dbg!(self.buf.lock().unwrap().len());
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         if let Some(stream) = &self.stream {
-            stream.pause().map_err(|e| e.to_string())?;
+            stream.pause()?;
             self.stream = None;
         }
 
         Ok(())
     }
 
-    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<(), String> {
+    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<()> {
         self.header = Some(header.clone());
         Ok(())
     }
