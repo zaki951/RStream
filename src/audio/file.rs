@@ -8,13 +8,13 @@ pub enum FileFormat {
 pub trait AudioWriter {
     fn write(&mut self, data: &[u8]) -> Result<()>;
     fn finalize(&mut self) -> Result<()>;
-    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<()>;
+    fn update_format(&mut self, header: &crate::protocol::AudioHeader) -> Result<()>;
 }
 
 pub trait AudioReader {
     fn read(&mut self, data: &mut [u8]) -> Result<usize>;
     fn open_file(&mut self, file_path: &str) -> Result<()>;
-    fn update_header(&mut self, header: &mut crate::protocol::Header);
+    fn update_header(&mut self, header: &mut crate::protocol::AudioHeader);
 }
 
 pub trait AudioPlayer {

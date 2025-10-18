@@ -1,18 +1,26 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-// Start Playing Process
-// Server Wait For Start
-// Server -> Send File
-// Each TCP payload has a header + Payload
+// ===============================================
+// RSTREAM PROTOCOL v0.1 (Draft)
+// ===============================================
+//
+// Simple TCP-based audio streaming protocol.
+// The goal is to define clear message types
+// for client-server communication without
+// adding unnecessary complexity.
+// ===============================================
 
-const PROTOCOL_MAGIC: u16 = 0xA1B2;
+const PROTOCOL_MAGIC: u32 = 0xA1B2C3D4;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Encode, Decode, PartialEq)]
 pub enum MessageType {
+    Hello,
+    Ok,
+    Bye,
     StartPlaying,
     StopPlaying,
-    RawData,
+    AudioHeader,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Encode, Decode)]
@@ -23,59 +31,29 @@ pub enum SampleFormat {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Encode, Decode)]
-pub struct Header {
-    magic: u16,
+
+pub struct ProtocolInfo {
     version: u8,
-    msg_type: MessageType,
-    payload_size: u32,
+}
+
+impl ProtocolInfo {
+    fn new() -> Self {
+        const VERSION: u8 = 1;
+        Self { version: VERSION }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Encode, Decode)]
+pub struct AudioHeader {
     sample_rate: u32,
     channels: u8,
     bits_per_sample: u8,
     sample_format: SampleFormat,
 }
 
-pub fn make_full_message(header: &Header, payload: &[u8]) -> Vec<u8> {
-    let config = bincode::config::standard();
-
-    let mut message = bincode::encode_to_vec(header, config).unwrap();
-    message.extend_from_slice(payload);
-    message
-}
-pub fn make_start_playing_message() -> Vec<u8> {
-    let header = Header {
-        magic: PROTOCOL_MAGIC,
-        version: 1,
-        msg_type: MessageType::StartPlaying,
-        payload_size: 0,
-        sample_rate: 0,
-        channels: 0,
-        bits_per_sample: 0,
-        sample_format: SampleFormat::Int,
-    };
-    make_full_message(&header, &[])
-}
-
-pub fn extract_header(data: &[u8]) -> Option<(Header, &[u8], usize)> {
-    let config = bincode::config::standard();
-    let (header, bytes_read): (Header, usize) = bincode::decode_from_slice(data, config).ok()?;
-
-    let message_len = bytes_read + header.payload_size as usize;
-    if data.len() < message_len {
-        return None;
-    }
-
-    let payload = &data[bytes_read..message_len];
-
-    Some((header, payload, message_len))
-}
-
-impl Header {
-    pub fn new(msg_type: MessageType) -> Self {
+impl AudioHeader {
+    pub fn new() -> Self {
         Self {
-            magic: PROTOCOL_MAGIC,
-            version: 1,
-            msg_type,
-            payload_size: 0,
             sample_rate: 0,
             channels: 0,
             bits_per_sample: 0,
@@ -119,20 +97,192 @@ impl Header {
             hound::SampleFormat::Int => SampleFormat::Int,
         };
     }
+}
 
-    pub fn set_payload_size(&mut self, payload_size: u32) {
-        self.payload_size = payload_size
+// ===============================================
+// Authentication Process
+// ===============================================
+//
+// [client -> server]  [Magic][HELLO]
+//   - Magic: 4 bytes constant used for protocol sync
+//   - HELLO: u8 (0x01)
+//   => Client initiates handshake
+//
+// [server -> client]  [HELLO][PROTOCOL INFO]
+//   - HELLO: u8 (0x01)
+//   - PROTOCOL INFO: variable bytes
+//   => Server acknowledges and shares capabilities
+//
+// [client -> server]  [OK]
+//   - OK: u8 (0x02)
+//   => Client confirms handshake success
+
+pub fn make_client_hello_message() -> Vec<u8> {
+    let config = bincode::config::standard();
+
+    let mut message = bincode::encode_to_vec(PROTOCOL_MAGIC, config).unwrap();
+    message.push(MessageType::Hello as u8);
+    message
+}
+
+fn get_hello_message_size() -> usize {
+    make_client_hello_message().len()
+}
+
+pub fn check_client_hello_message(data: &[u8]) -> bool {
+    if data.len() != get_hello_message_size() {
+        return false;
     }
 
-    pub fn is_data_message(&self) -> bool {
-        self.msg_type == MessageType::RawData
+    let config = bincode::config::standard();
+    let (magic, _): (u32, usize) = match bincode::decode_from_slice(&data[0..4], config) {
+        Ok(result) => result,
+        Err(_) => return false,
+    };
+
+    let msg_type = data[4];
+
+    magic == PROTOCOL_MAGIC && msg_type == MessageType::Hello as u8
+}
+
+pub fn make_server_hello_message() -> Vec<u8> {
+    let config = bincode::config::standard();
+
+    let protocol_info = ProtocolInfo::new();
+    let protocol_info_bytes = bincode::encode_to_vec(&protocol_info, config).unwrap();
+
+    let mut message = bincode::encode_to_vec(MessageType::Hello, config).unwrap();
+    message.extend_from_slice(&protocol_info_bytes);
+    message
+}
+
+pub fn extract_protocol_info(data: &[u8]) -> Option<ProtocolInfo> {
+    let config = bincode::config::standard();
+
+    let (protocol_info, _): (ProtocolInfo, usize) =
+        bincode::decode_from_slice(&data[1..], config).ok()?;
+
+    Some(protocol_info)
+}
+
+pub fn make_ok_message() -> Vec<u8> {
+    let config = bincode::config::standard();
+
+    bincode::encode_to_vec(MessageType::Ok, config).unwrap()
+}
+
+// ===============================================
+// Audio Streaming Process
+// ===============================================
+//
+// [client -> server]  [START_PLAY]
+//   - START_PLAY: u8 (0x10)
+//   => Client requests to start receiving audio
+//
+// [server -> client]  [WAV_HEADER]
+//   - WAV_HEADER: u8 (0x11)
+//   - Data: fixed-size WAV header (44 bytes for PCM)
+//   => Sent once before audio stream
+// [client -> server]  [OK]
+// [server -> client]  [AUDIO_DATA]
+//   - AUDIO_DATA: u8 (0x12)
+//   - Data: raw PCM samples or encoded chunk
+//   => Streamed continuously until stopped
+
+pub fn make_start_playing_message() -> Vec<u8> {
+    let config = bincode::config::standard();
+
+    bincode::encode_to_vec(MessageType::StartPlaying, config).unwrap()
+}
+
+pub fn extract_message_type(data: &[u8]) -> Option<MessageType> {
+    if data.is_empty() {
+        return None;
     }
 
-    pub fn is_start_playing_message(&self) -> bool {
-        self.msg_type == MessageType::StartPlaying
+    let config = bincode::config::standard();
+    let (msg_type, _): (MessageType, usize) = match bincode::decode_from_slice(&data[0..1], config)
+    {
+        Ok(result) => result,
+        Err(_) => return None,
+    };
+
+    Some(msg_type)
+}
+
+pub fn extract_wav_header(data: &[u8]) -> Option<AudioHeader> {
+    let config = bincode::config::standard();
+
+    let (header, _): (AudioHeader, usize) = bincode::decode_from_slice(&data[1..], config).ok()?;
+
+    Some(header)
+}
+
+pub fn audio_header_to_bytes(header: &AudioHeader) -> Vec<u8> {
+    let config = bincode::config::standard();
+
+    let mut message = bincode::encode_to_vec(MessageType::AudioHeader, config).unwrap();
+    let header_bytes = bincode::encode_to_vec(header, config).unwrap();
+    message.extend_from_slice(&header_bytes);
+    message
+}
+
+pub fn check_ok_message(data: &[u8]) -> bool {
+    if data.len() != 1 {
+        return false;
     }
 
-    pub fn is_valid_magic(&self) -> bool {
-        self.magic == PROTOCOL_MAGIC
+    let config = bincode::config::standard();
+    let (msg_type, _): (MessageType, usize) = match bincode::decode_from_slice(&data[0..1], config)
+    {
+        Ok(result) => result,
+        Err(_) => return false,
+    };
+
+    msg_type == MessageType::Ok
+}
+
+// ===============================================
+// End / Termination Process
+// ===============================================
+//
+// [server -> client]  [STOP_PLAY]
+//   - STOP_PLAY: u8 (0x13)
+//   => Server signals end of stream
+//
+// [client -> server]  [BYE]
+//   - BYE: u8 (0x14)
+//   => Client requests connection close
+//
+// [server -> client]  [BYE]
+//   - BYE: u8 (0x14)
+//   => Server confirms disconnection
+//
+//
+
+pub fn make_stop_playing_message() -> Vec<u8> {
+    let config = bincode::config::standard();
+
+    bincode::encode_to_vec(MessageType::StopPlaying, config).unwrap()
+}
+
+pub fn make_bye_message() -> Vec<u8> {
+    let config = bincode::config::standard();
+
+    bincode::encode_to_vec(MessageType::Bye, config).unwrap()
+}
+
+pub fn check_bye_message(data: &[u8]) -> bool {
+    if data.len() != 1 {
+        return false;
     }
+
+    let config = bincode::config::standard();
+    let (msg_type, _): (MessageType, usize) = match bincode::decode_from_slice(&data[0..1], config)
+    {
+        Ok(result) => result,
+        Err(_) => return false,
+    };
+
+    msg_type == MessageType::Bye
 }

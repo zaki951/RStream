@@ -3,8 +3,11 @@ use crate::{
     protocol::{self},
 };
 use anyhow::Result;
+use bytes::Bytes;
+use futures::SinkExt;
 use std::io::BufWriter;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 pub struct WavFileRead {
     reader: Option<hound::WavReader<std::io::BufReader<std::fs::File>>>,
@@ -112,7 +115,7 @@ impl AudioReader for WavFileRead {
         Ok(())
     }
 
-    fn update_header(&mut self, header: &mut crate::protocol::Header) {
+    fn update_header(&mut self, header: &mut crate::protocol::AudioHeader) {
         if let Some(reader) = &self.reader {
             let spec = reader.spec();
             header.update_wavspec(&spec);
@@ -177,7 +180,7 @@ impl AudioWriter for WavFileWrite {
             Ok(())
         }
     }
-    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<()> {
+    fn update_format(&mut self, header: &crate::protocol::AudioHeader) -> Result<()> {
         if self.writer.is_none() {
             let spec = header.to_wavspec();
             let writer = hound::WavWriter::create(&self.file_path, spec)?;
@@ -195,20 +198,32 @@ impl WavFileSender {
         audio_reader.open_file(file_path)?;
         let mut buffer = vec![0u8; 4096];
 
-        let mut header = protocol::Header::new(protocol::MessageType::RawData);
+        let mut header = protocol::AudioHeader::new();
         audio_reader.update_header(&mut header);
+
+        // send header
+        let header_bytes = protocol::audio_header_to_bytes(&header);
+
+        socket.write_all(&header_bytes).await?;
+
+        let mut framed = Framed::new(socket, LengthDelimitedCodec::new());
+
         loop {
             let n = audio_reader.read(&mut buffer[..])?;
             if n == 0 {
                 break;
             }
-            header.set_payload_size(n as u32);
-            let fmessage = protocol::make_full_message(&header, &buffer[..n]);
-            socket.write_all(&fmessage).await?;
+
+            let chunk = Bytes::copy_from_slice(&buffer[..n]);
+            framed.send(chunk).await?;
             if n < buffer.len() {
                 break;
             }
         }
+
+        // send stop playing message
+        let stop_msg = protocol::make_stop_playing_message();
+        framed.send(Bytes::from(stop_msg)).await?;
 
         Ok(())
     }

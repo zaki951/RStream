@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use crate::audio::file::{AudioPlayer, AudioRecorder, AudioWriter, FileFormat};
-use crate::protocol::Header;
+use crate::protocol::AudioHeader;
 
 pub struct CpalInterface;
 
@@ -199,7 +199,7 @@ pub struct CpalFileWrite {
     buf: Arc<Mutex<VecDeque<u8>>>,
     played: bool,
     stream: Option<cpal::Stream>,
-    header: Option<Header>,
+    header: Option<AudioHeader>,
 }
 
 impl CpalFileWrite {
@@ -352,7 +352,7 @@ impl AudioWriter for CpalFileWrite {
         Ok(())
     }
 
-    fn update_format(&mut self, header: &crate::protocol::Header) -> Result<()> {
+    fn update_format(&mut self, header: &crate::protocol::AudioHeader) -> Result<()> {
         self.header = Some(header.clone());
         Ok(())
     }

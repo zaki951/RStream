@@ -26,12 +26,10 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let client = client_manager::ClientSocket {
-        address: args.address,
-        port: args.port,
-    };
 
-    let mut handler = client.connect().await.expect("Failed to connect to server");
+    let mut handler = client_manager::ClientInterface::connect(args.address, args.port)
+        .await
+        .expect("Failed to connect to server");
 
     if args.play {
         handler.add_capability(client_manager::Capabilities::RealTimePlayback);

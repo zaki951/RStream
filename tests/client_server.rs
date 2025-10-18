@@ -1,5 +1,6 @@
 use anyhow::Result;
 use hound;
+use std::sync::Arc;
 use std::time::Duration;
 use streamapp::client::client_manager;
 use streamapp::server::server_manager;
@@ -10,8 +11,11 @@ const PATH_INPUT: &str = "/tmp/test_input.wav";
 const PATH_OUTPUT: &str = "/tmp/test_output.wav";
 
 async fn server_task() -> Result<()> {
-    let server: server_manager::Server =
-        server_manager::Server::new(ADDRESS.to_string(), PORT, PATH_INPUT.to_string());
+    let server = Arc::new(server_manager::Server::new(
+        ADDRESS.to_string(),
+        PORT,
+        PATH_INPUT.to_string(),
+    ));
     server.run().await;
 
     Ok(())
@@ -82,33 +86,30 @@ pub fn compare_wav_samples(file1: &str, file2: &str) -> bool {
 }
 
 async fn client_task() -> Result<()> {
-    let client = client_manager::ClientSocket {
-        address: ADDRESS.to_string(),
-        port: PORT,
-    };
-
-    let mut handler = client.connect().await.expect("Failed to connect to server");
-
+    let mut handler = client_manager::ClientInterface::connect(ADDRESS.to_string(), PORT)
+        .await
+        .expect("Failed to connect to server");
     handler
+        .add_capability(client_manager::Capabilities::RealTimePlayback)
         .add_capability(client_manager::Capabilities::SaveToFile(
             PATH_OUTPUT.to_string(),
         ))
-        .add_capability(client_manager::Capabilities::RealTimePlayback)
         .start_playing()
         .await
 }
 
 #[tokio::test]
-async fn test_client_server_file_transfert() {
+async fn test_client_server_file_transfert() -> Result<()> {
     assert!(std::path::Path::new(&PATH_INPUT).is_file());
     let _ = tokio::spawn(async { server_task().await });
 
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    client_task().await.unwrap();
+    client_task().await?;
 
     assert!(
         compare_wav_samples(PATH_INPUT, PATH_OUTPUT),
         "Files differ!"
     );
+    Ok(())
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use clap::Parser;
 use streamapp::audio::{cpal::CpalInterface, file::AudioRecorder};
 use streamapp::server::server_manager;
@@ -67,7 +69,7 @@ async fn main() -> Result<(), String> {
 
     println!("Starting server...");
 
-    let server = server_manager::Server::new(args.address, args.port, path);
+    let server = Arc::new(server_manager::Server::new(args.address, args.port, path));
     server.run().await;
 
     Ok(())
