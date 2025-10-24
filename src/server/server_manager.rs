@@ -9,10 +9,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 pub struct Server {
-    address: String,
-    port: u16,
     send_file_format: FileFormat,
     file_path: String,
+    listener: TcpListener,
 }
 
 async fn send_file(file_format: FileFormat, mut socket: &mut TcpStream, file: &str) -> Result<()> {
@@ -26,12 +25,17 @@ async fn send_file(file_format: FileFormat, mut socket: &mut TcpStream, file: &s
 }
 
 impl Server {
-    pub fn new(address: String, port: u16, file_path: String) -> Self {
+    pub async fn new(address: String, port: u16, file_path: String) -> Self {
+        let listener = TcpListener::bind(format!("{}:{}", address, port))
+            .await
+            .expect("Failed to bind to address");
+
+        println!("Server listening on {}:{}", address, port);
+
         Self {
-            address,
-            port,
             send_file_format: FileFormat::Wav,
             file_path,
+            listener,
         }
     }
     #[allow(unused)]
@@ -143,14 +147,9 @@ impl Server {
         Ok(())
     }
     pub async fn run(self: Arc<Self>) {
-        let listener = TcpListener::bind(format!("{}:{}", self.address, self.port))
-            .await
-            .expect("Failed to bind to address");
-
-        println!("Server listening on {}:{}", self.address, self.port);
-
         loop {
-            let (socket, addr) = listener
+            let (socket, addr) = self
+                .listener
                 .accept()
                 .await
                 .expect("Failed to accept connection");

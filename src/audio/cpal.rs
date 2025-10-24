@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 use crate::audio::file::{AudioPlayer, AudioRecorder, AudioWriter, FileFormat};
 use crate::protocol::AudioHeader;
@@ -22,7 +22,12 @@ impl AudioPlayer for CpalInterface {
 }
 
 impl AudioRecorder for CpalInterface {
-    fn record_into_file(&self, duration: u64, path: &str, format: FileFormat) -> Result<()> {
+    fn record_into_file(
+        &self,
+        duration: u64,
+        path: &str,
+        format: FileFormat,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         match format {
             FileFormat::Wav => record_audio(duration, path),
         }
@@ -42,8 +47,7 @@ where
         .map(|s| s.unwrap_or(T::EQUILIBRIUM))
         .collect();
 
-    let done = Arc::new(AtomicBool::new(false));
-    let done_clone = done.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
 
     let mut samples_iter = samples.into_iter();
 
@@ -56,7 +60,7 @@ where
                 *sample = samples_iter.next().unwrap_or(T::EQUILIBRIUM);
             }
             if samples_iter.len() == 0 {
-                done_clone.store(true, Ordering::Release);
+                tx.send(()).unwrap();
             }
         },
         err_fn,
@@ -65,9 +69,7 @@ where
 
     stream.play()?;
 
-    while !done.load(Ordering::Acquire) {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    rx.recv().unwrap();
 
     Ok(())
 }
@@ -99,7 +101,7 @@ pub fn play_audio_from_wav(path: &str) -> Result<()> {
     }
 }
 
-fn record_audio(duration: u64, path: &str) -> Result<()> {
+async fn record_audio(duration: u64, path: &str) -> Result<()> {
     let host = cpal::default_host();
 
     let device = host.default_input_device().unwrap();
@@ -154,7 +156,7 @@ fn record_audio(duration: u64, path: &str) -> Result<()> {
 
     stream.play()?;
 
-    std::thread::sleep(std::time::Duration::from_secs(duration));
+    tokio::time::sleep(std::time::Duration::from_secs(duration)).await;
     drop(stream);
     writer.lock().unwrap().take().unwrap().finalize()?;
     println!("Recording {path} complete!");
@@ -197,7 +199,9 @@ where
 
 pub struct CpalFileWrite {
     buf: Arc<Mutex<VecDeque<u8>>>,
-    played: bool,
+    play_done_tx: mpsc::Sender<()>,
+    play_done_rx: mpsc::Receiver<()>,
+    first_play: AtomicBool,
     stream: Option<cpal::Stream>,
     header: Option<AudioHeader>,
 }
@@ -205,9 +209,13 @@ pub struct CpalFileWrite {
 impl CpalFileWrite {
     pub fn new() -> Self {
         const DEFAULT_CAPACITY: usize = 400_000;
+        let (tx, rx) = mpsc::channel();
+
         Self {
             buf: Arc::new(Mutex::new(VecDeque::with_capacity(DEFAULT_CAPACITY))),
-            played: false,
+            play_done_tx: tx,
+            play_done_rx: rx,
+            first_play: AtomicBool::new(true),
             stream: None,
             header: None,
         }
@@ -276,7 +284,9 @@ impl CpalFileWrite {
         let channels = config.channels as usize;
         let sample_size = std::mem::size_of::<T>();
         let frame_size = channels * sample_size;
-
+        let tx1 = self.play_done_tx.clone();
+        let notified = std::sync::Arc::new(AtomicBool::new(false));
+        let notified_clone = notified.clone();
         let stream = device.build_output_stream(
             &config,
             move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -314,6 +324,11 @@ impl CpalFileWrite {
                             *sample = T::EQUILIBRIUM;
                         }
                     }
+
+                    if buf.is_empty() && !notified_clone.load(Ordering::Relaxed) {
+                        tx1.send(()).unwrap();
+                        notified_clone.store(true, Ordering::Relaxed);
+                    }
                 }
             },
             err_fn,
@@ -327,12 +342,12 @@ impl CpalFileWrite {
 
 impl AudioWriter for CpalFileWrite {
     fn write(&mut self, data: &[u8]) -> Result<()> {
-        if !self.played {
+        if self.first_play.load(Ordering::Relaxed) {
             self.play_audio_from_buf()?;
             if let Some(stream) = &self.stream {
                 stream.play()?;
             }
-            self.played = true;
+            self.first_play.store(false, Ordering::Relaxed);
         }
         let mut buf = self.buf.lock().unwrap();
         buf.extend(data);
@@ -340,10 +355,8 @@ impl AudioWriter for CpalFileWrite {
     }
 
     fn finalize(&mut self) -> Result<()> {
-        // wait until buffer is empty
-        while !self.buf.lock().unwrap().is_empty() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
+        self.play_done_rx.recv().unwrap();
+        dbg!("Buffer emptied, stopping stream.");
         if let Some(stream) = &self.stream {
             stream.pause()?;
             self.stream = None;

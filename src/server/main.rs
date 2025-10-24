@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Result;
 use clap::Parser;
 use streamapp::audio::{cpal::CpalInterface, file::AudioRecorder};
 use streamapp::server::server_manager;
@@ -35,7 +36,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), String> {
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     let audio_interface = CpalInterface;
@@ -49,27 +50,28 @@ async fn main() -> Result<(), String> {
                     &args.output,
                     streamapp::audio::file::FileFormat::Wav,
                 )
-                .map_err(|e| e.to_string())?;
+                .await
+                .unwrap();
             println!("Recording saved to {}", &args.output);
             args.output
         }
         "file" => {
             let path = args
                 .path
-                .ok_or_else(|| "The file path should be specified".to_string())?;
+                .ok_or_else(|| anyhow::anyhow!("The file path should be specified"))?;
             if !std::path::Path::new(&path).is_file() {
-                return Err(format!("Invalid file path {}", path));
+                return Err(anyhow::anyhow!(format!("Invalid file path {}", path)));
             }
             path
         }
         _ => {
-            return Err("Invalid mode. Use 'rec' or 'file'.".to_string());
+            return Err(anyhow::anyhow!("Invalid mode. Use 'rec' or 'file'."));
         }
     };
 
     println!("Starting server...");
 
-    let server = Arc::new(server_manager::Server::new(args.address, args.port, path));
+    let server = Arc::new(server_manager::Server::new(args.address, args.port, path).await);
     server.run().await;
 
     Ok(())

@@ -22,5 +22,10 @@ pub trait AudioPlayer {
 }
 
 pub trait AudioRecorder {
-    fn record_into_file(&self, duration: u64, path: &str, format: FileFormat) -> Result<()>;
+    fn record_into_file(
+        &self,
+        duration: u64,
+        path: &str,
+        format: FileFormat,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }

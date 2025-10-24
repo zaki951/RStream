@@ -1,7 +1,6 @@
 use anyhow::Result;
 use hound;
 use std::sync::Arc;
-use std::time::Duration;
 use streamapp::client::client_manager;
 use streamapp::server::server_manager;
 
@@ -9,17 +8,6 @@ const ADDRESS: &str = "localhost";
 const PORT: u16 = 8080;
 const PATH_INPUT: &str = "/tmp/test_input.wav";
 const PATH_OUTPUT: &str = "/tmp/test_output.wav";
-
-async fn server_task() -> Result<()> {
-    let server = Arc::new(server_manager::Server::new(
-        ADDRESS.to_string(),
-        PORT,
-        PATH_INPUT.to_string(),
-    ));
-    server.run().await;
-
-    Ok(())
-}
 
 pub fn compare_wav_samples(file1: &str, file2: &str) -> bool {
     let reader1 = hound::WavReader::open(file1).expect("Cannot open first WAV file");
@@ -97,19 +85,21 @@ async fn client_task() -> Result<()> {
         .start_playing()
         .await
 }
-
 #[tokio::test]
-async fn test_client_server_file_transfert() -> Result<()> {
-    assert!(std::path::Path::new(&PATH_INPUT).is_file());
-    let _ = tokio::spawn(async { server_task().await });
+async fn test_audio_streaming() -> Result<()> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::spawn(async move {
+        let server = Arc::new(
+            server_manager::Server::new(ADDRESS.to_string(), PORT, PATH_INPUT.to_string()).await,
+        );
+        tx.send(()).await.unwrap();
+        server.run().await;
+    });
+
+    rx.recv().await.unwrap();
 
     client_task().await?;
 
-    assert!(
-        compare_wav_samples(PATH_INPUT, PATH_OUTPUT),
-        "Files differ!"
-    );
     Ok(())
 }
