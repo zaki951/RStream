@@ -78,7 +78,6 @@ async fn client_task() -> Result<()> {
         .await
         .expect("Failed to connect to server");
     handler
-        .add_capability(client_manager::Capabilities::RealTimePlayback)
         .add_capability(client_manager::Capabilities::SaveToFile(
             PATH_OUTPUT.to_string(),
         ))

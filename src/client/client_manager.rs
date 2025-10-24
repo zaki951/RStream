@@ -106,6 +106,8 @@ impl ClientInterface {
 
         self.update_audio_header().await?;
 
+        network::common::send_ok_message(&mut self.tcp_stream).await?;
+
         self.recv_data_and_write_it().await?;
 
         self.end_audio()?;

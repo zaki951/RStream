@@ -24,7 +24,7 @@ pub async fn client_authenticate(tcp_stream: &mut TcpStream) -> Result<ProtocolI
     ))
 }
 
-async fn send_ok_message(tcp_stream: &mut TcpStream) -> Result<()> {
+pub async fn send_ok_message(tcp_stream: &mut TcpStream) -> Result<()> {
     let ok_msg = crate::protocol::make_ok_message();
     tcp_stream
         .write_all(&ok_msg)
@@ -92,7 +92,8 @@ async fn expect_hello(socket: &mut TcpStream) -> Result<()> {
     }
 }
 
-async fn expect_ok_message(socket: &mut TcpStream) -> Result<()> {
+pub async fn expect_ok_message(socket: &mut TcpStream) -> Result<()> {
+    dbg!("Expecting OK message from server...");
     let mut recv_buf = [0u8; 4096];
     match socket.read(&mut recv_buf).await {
         Ok(0) => Err(anyhow::anyhow!(

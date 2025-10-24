@@ -60,6 +60,7 @@ impl AudioHeader {
             sample_format: SampleFormat::Int,
         }
     }
+
     pub fn get_sample_format(&self) -> SampleFormat {
         self.sample_format
     }
