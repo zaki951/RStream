@@ -1,13 +1,7 @@
-use crate::{
-    audio::file::{AudioReader, AudioWriter},
-    protocol::{self},
-};
+use crate::audio::file::{AudioReader, AudioWriter};
 use anyhow::Result;
-use bytes::Bytes;
-use futures::SinkExt;
+
 use std::io::BufWriter;
-use tokio::{io::AsyncWriteExt, net::TcpStream};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 pub struct WavFileRead {
     reader: Option<hound::WavReader<std::io::BufReader<std::fs::File>>>,
@@ -186,45 +180,6 @@ impl AudioWriter for WavFileWrite {
             let writer = hound::WavWriter::create(&self.file_path, spec)?;
             self.writer = Some(writer);
         }
-        Ok(())
-    }
-}
-
-pub struct WavFileSender;
-
-impl WavFileSender {
-    pub async fn send_file(&self, socket: &mut TcpStream, file_path: &str) -> Result<()> {
-        let mut audio_reader = WavFileRead::new();
-        audio_reader.open_file(file_path)?;
-        let mut buffer = vec![0u8; 4096];
-
-        let mut header = protocol::AudioHeader::new();
-        audio_reader.update_header(&mut header);
-
-        // send header
-        let header_bytes = protocol::audio_header_to_bytes(&header);
-
-        socket.write_all(&header_bytes).await?;
-
-        let mut framed = Framed::new(socket, LengthDelimitedCodec::new());
-
-        loop {
-            let n = audio_reader.read(&mut buffer[..])?;
-            if n == 0 {
-                break;
-            }
-
-            let chunk = Bytes::copy_from_slice(&buffer[..n]);
-            framed.send(chunk).await?;
-            if n < buffer.len() {
-                break;
-            }
-        }
-
-        // send stop playing message
-        let stop_msg = protocol::make_stop_playing_message();
-        framed.send(Bytes::from(stop_msg)).await?;
-
         Ok(())
     }
 }

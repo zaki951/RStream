@@ -286,3 +286,18 @@ pub fn check_bye_message(data: &[u8]) -> bool {
 
     msg_type == MessageType::Bye
 }
+
+pub fn is_stop_playing_message(data: &[u8]) -> bool {
+    if data.len() != 1 {
+        return false;
+    }
+
+    let config = bincode::config::standard();
+    let (msg_type, _): (crate::protocol::MessageType, usize) =
+        match bincode::decode_from_slice(&data[0..1], config) {
+            Ok(result) => result,
+            Err(_) => return false,
+        };
+
+    msg_type == crate::protocol::MessageType::StopPlaying
+}
