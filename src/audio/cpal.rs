@@ -101,6 +101,29 @@ pub fn play_audio_from_wav(path: &str) -> Result<()> {
     }
 }
 
+fn build_record_stream<T, U>(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    writer: &WavWriterHandle,
+) -> Result<cpal::Stream>
+where
+    T: cpal::Sample + FromSample<U> + cpal::SizedSample,
+    U: cpal::Sample + hound::Sample + cpal::FromSample<T>,
+{
+    let writer_2 = writer.clone();
+    let err_fn = move |err| {
+        eprintln!("an error occurred on stream: {err}");
+    };
+    device
+        .build_input_stream(
+            &config.clone().into(),
+            move |data, _: &_| write_input_data::<T, U>(data, &writer_2),
+            err_fn,
+            None,
+        )
+        .map_err(anyhow::Error::from)
+}
+
 async fn record_audio(duration: u64, path: &str) -> Result<()> {
     let host = cpal::default_host();
 
@@ -116,43 +139,17 @@ async fn record_audio(duration: u64, path: &str) -> Result<()> {
 
     println!("Begin recording...");
 
-    let writer_2 = writer.clone();
-
-    let err_fn = move |err| {
-        eprintln!("an error occurred on stream: {err}");
-    };
-
     let stream = match config.sample_format() {
-        cpal::SampleFormat::I8 => device.build_input_stream(
-            &config.into(),
-            move |data, _: &_| write_input_data::<i8, i8>(data, &writer_2),
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &config.into(),
-            move |data, _: &_| write_input_data::<i16, i16>(data, &writer_2),
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::I32 => device.build_input_stream(
-            &config.into(),
-            move |data, _: &_| write_input_data::<i32, i32>(data, &writer_2),
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &config.into(),
-            move |data, _: &_| write_input_data::<f32, f32>(data, &writer_2),
-            err_fn,
-            None,
-        )?,
+        cpal::SampleFormat::I8 => build_record_stream::<i8, i8>(&device, &config, &writer),
+        cpal::SampleFormat::I16 => build_record_stream::<i16, i16>(&device, &config, &writer),
+        cpal::SampleFormat::I32 => build_record_stream::<i32, i32>(&device, &config, &writer),
+        cpal::SampleFormat::F32 => build_record_stream::<f32, f32>(&device, &config, &writer),
         sample_format => {
-            return Err(anyhow::Error::msg(format!(
+            return Err(anyhow::anyhow!(
                 "Unsupported sample format '{sample_format}'"
-            )));
+            ));
         }
-    };
+    }?;
 
     stream.play()?;
 
@@ -243,12 +240,12 @@ impl CpalFileWrite {
 
         match header.get_sample_format() {
             crate::protocol::SampleFormat::Int => match header.get_bits_per_sample() {
-                16 => return self.build_stream::<i16>(device, config, cloned_buf, err_fn),
-                32 => return self.build_stream::<i32>(device, config, cloned_buf, err_fn),
+                16 => return self.build_output_stream::<i16>(device, config, cloned_buf, err_fn),
+                32 => return self.build_output_stream::<i32>(device, config, cloned_buf, err_fn),
                 _ => return Err(anyhow::anyhow!("Unsupported bits per sample")),
             },
             crate::protocol::SampleFormat::Float => match header.get_bits_per_sample() {
-                32 => return self.build_stream::<f32>(device, config, cloned_buf, err_fn),
+                32 => return self.build_output_stream::<f32>(device, config, cloned_buf, err_fn),
                 _ => return Err(anyhow::anyhow!("Unsupported bits per sample")),
             },
         }
@@ -258,14 +255,42 @@ impl CpalFileWrite {
         if buf.len() < sample_size {
             return None;
         }
-        let mut bytes = Vec::with_capacity(sample_size);
-        for _ in 0..sample_size {
-            bytes.push(buf.pop_front().unwrap());
-        }
-        Some(bytes)
+        Some(buf.drain(..sample_size).collect())
     }
 
-    fn build_stream<T>(
+    fn get_sample_value<T>(mut buf: &mut VecDeque<u8>, sample_size: usize) -> Result<T>
+    where
+        T: cpal::Sample
+            + cpal::SizedSample
+            + FromSample<i16>
+            + FromSample<i32>
+            + FromSample<f32>
+            + Send
+            + 'static,
+    {
+        let bytes = Self::extract_bytes_from_buf(&mut buf, sample_size).unwrap();
+        let value = match sample_size {
+            2 => {
+                let arr: [u8; 2] = bytes.try_into().expect("bytes must be 2 long");
+                let val = i16::from_le_bytes(arr);
+                T::from_sample(val)
+            }
+            4 => {
+                let arr: [u8; 4] = bytes.try_into().expect("bytes must be 4 long");
+                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() {
+                    let val = f32::from_le_bytes(arr);
+                    T::from_sample(val)
+                } else {
+                    let val = i32::from_le_bytes(arr);
+                    T::from_sample(val)
+                }
+            }
+            _ => T::EQUILIBRIUM,
+        };
+        Ok(value)
+    }
+
+    fn build_output_stream<T>(
         &mut self,
         device: cpal::Device,
         config: cpal::StreamConfig,
@@ -294,29 +319,8 @@ impl CpalFileWrite {
                 for frame in output.chunks_mut(channels) {
                     if buf.len() >= frame_size {
                         for sample in frame.iter_mut() {
-                            let bytes =
-                                Self::extract_bytes_from_buf(&mut buf, sample_size).unwrap();
-                            let value = match sample_size {
-                                2 => {
-                                    let arr: [u8; 2] =
-                                        bytes.try_into().expect("bytes must be 2 long");
-                                    let val = i16::from_le_bytes(arr);
-                                    T::from_sample(val)
-                                }
-                                4 => {
-                                    let arr: [u8; 4] =
-                                        bytes.try_into().expect("bytes must be 4 long");
-                                    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
-                                    {
-                                        let val = f32::from_le_bytes(arr);
-                                        T::from_sample(val)
-                                    } else {
-                                        let val = i32::from_le_bytes(arr);
-                                        T::from_sample(val)
-                                    }
-                                }
-                                _ => T::EQUILIBRIUM,
-                            };
+                            let value = Self::get_sample_value::<T>(&mut buf, sample_size)
+                                .unwrap_or(T::EQUILIBRIUM);
                             *sample = value;
                         }
                     } else {
